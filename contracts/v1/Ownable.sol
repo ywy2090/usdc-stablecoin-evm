@@ -26,49 +26,57 @@
 pragma solidity 0.6.12;
 
 /**
- * @notice The Ownable contract has an owner address, and provides basic
- * authorization control functions
- * @dev Forked from https://github.com/OpenZeppelin/openzeppelin-labs/blob/3887ab77b8adafba4a26ace002f3a684c1a3388b/upgradeability_ownership/contracts/ownership/Ownable.sol
- * Modifications:
- * 1. Consolidate OwnableStorage into this contract (7/13/18)
- * 2. Reformat, conform to Solidity 0.6 syntax, and add error messages (5/13/20)
- * 3. Make public functions external (5/27/20)
+ * @title Ownable - 所有权管理合约
+ * @notice Ownable 合约包含一个所有者地址，并提供基本的授权控制功能
+ * @dev 源自 OpenZeppelin 的 Ownable 合约
+ *
+ * 功能说明：
+ * - 合约部署时，部署者自动成为所有者
+ * - 所有者可以转移所有权给新地址
+ * - 提供 onlyOwner 修饰符，限制某些函数只能由所有者调用
+ *
+ * 修改历史：
+ * 1. 将 OwnableStorage 合并到此合约中 (7/13/18)
+ * 2. 重新格式化，符合 Solidity 0.6 语法，并添加错误消息 (5/13/20)
+ * 3. 将 public 函数改为 external (5/27/20)
  */
 contract Ownable {
-    // Owner of the contract
+    // 合约的所有者地址
     address private _owner;
 
     /**
-     * @dev Event to show ownership has been transferred
-     * @param previousOwner representing the address of the previous owner
-     * @param newOwner representing the address of the new owner
+     * @notice 所有权转移事件
+     * @param previousOwner 前任所有者的地址
+     * @param newOwner 新所有者的地址
      */
     event OwnershipTransferred(address previousOwner, address newOwner);
 
     /**
-     * @dev The constructor sets the original owner of the contract to the sender account.
+     * @notice 构造函数 - 将合约部署者设置为初始所有者
      */
     constructor() public {
         setOwner(msg.sender);
     }
 
     /**
-     * @dev Tells the address of the owner
-     * @return the address of the owner
+     * @notice 查询当前所有者地址
+     * @return 所有者的地址
      */
     function owner() external view returns (address) {
         return _owner;
     }
 
     /**
-     * @dev Sets a new owner address
+     * @notice 设置新的所有者地址（内部函数）
+     * @param newOwner 新所有者的地址
      */
     function setOwner(address newOwner) internal {
         _owner = newOwner;
     }
 
     /**
-     * @dev Throws if called by any account other than the owner.
+     * @notice 修饰符：仅允许所有者调用
+     * @dev 如果调用者不是所有者，则交易回滚
      */
     modifier onlyOwner() {
         require(msg.sender == _owner, "Ownable: caller is not the owner");
@@ -76,8 +84,9 @@ contract Ownable {
     }
 
     /**
-     * @dev Allows the current owner to transfer control of the contract to a newOwner.
-     * @param newOwner The address to transfer ownership to.
+     * @notice 转移合约所有权给新地址
+     * @dev 只有当前所有者可以调用此函数
+     * @param newOwner 新所有者的地址，不能是零地址
      */
     function transferOwnership(address newOwner) external onlyOwner {
         require(

@@ -25,44 +25,69 @@ import { Pausable } from "./Pausable.sol";
 import { Blacklistable } from "./Blacklistable.sol";
 
 /**
- * @title FiatToken
- * @dev ERC20 Token backed by fiat reserves
+ * @title FiatTokenV1 - 法币支持的代币合约 V1
+ * @notice 由法币储备支持的 ERC20 代币实现
+ * @dev 这是 USDC 的第一个主要版本（2018年发布）
+ *
+ * 核心功能：
+ * 1. ERC20 标准：完整实现 transfer、approve、transferFrom 等
+ * 2. 铸币/销毁：支持多个铸币者，由 masterMinter 管理
+ * 3. 暂停机制：紧急情况下可暂停所有转账
+ * 4. 黑名单：阻止可疑地址使用代币
+ * 5. 角色管理：owner、pauser、blacklister、masterMinter 分离
+ *
+ * 存储优化：
+ * - balanceAndBlacklistStates: 原计划合并余额和黑名单状态（V1实际未使用）
+ * - V2.2 版本实现了这个优化，节省 gas
+ *
+ * 安全特性：
+ * - 使用 SafeMath 防止整数溢出
+ * - 初始化保护（只能初始化一次）
+ * - 多重角色权限控制
  */
 contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     using SafeMath for uint256;
 
-    string public name;
-    string public symbol;
-    uint8 public decimals;
-    string public currency;
-    address public masterMinter;
-    bool internal initialized;
+    string public name;            // 代币名称，例如 "USD Coin"
+    string public symbol;          // 代币符号，例如 "USDC"
+    uint8 public decimals;         // 小数位数，通常为 6
+    string public currency;        // 对应的法币，例如 "USD"
+    address public masterMinter;   // 主铸币者地址，管理所有铸币者
+    bool internal initialized;     // 初始化标志，防止重复初始化
 
-    /// @dev A mapping that stores the balance and blacklist states for a given address.
-    /// The first bit defines whether the address is blacklisted (1 if blacklisted, 0 otherwise).
-    /// The last 255 bits define the balance for the address.
+    /// @dev 存储地址的余额和黑名单状态的映射
+    /// 注意：V1 中此字段只存储余额，黑名单状态存储在 _deprecatedBlacklisted 中
+    /// V2.2 版本才真正实现了合并存储（第一位表示黑名单，后255位表示余额）
     mapping(address => uint256) internal balanceAndBlacklistStates;
-    mapping(address => mapping(address => uint256)) internal allowed;
-    uint256 internal totalSupply_ = 0;
-    mapping(address => bool) internal minters;
-    mapping(address => uint256) internal minterAllowed;
 
-    event Mint(address indexed minter, address indexed to, uint256 amount);
-    event Burn(address indexed burner, uint256 amount);
-    event MinterConfigured(address indexed minter, uint256 minterAllowedAmount);
-    event MinterRemoved(address indexed oldMinter);
-    event MasterMinterChanged(address indexed newMasterMinter);
+    mapping(address => mapping(address => uint256)) internal allowed;  // 授权额度映射
+    uint256 internal totalSupply_ = 0;                                 // 代币总供应量
+    mapping(address => bool) internal minters;                         // 铸币者映射
+    mapping(address => uint256) internal minterAllowed;                // 铸币者的铸币额度
+
+    event Mint(address indexed minter, address indexed to, uint256 amount);               // 铸币事件
+    event Burn(address indexed burner, uint256 amount);                                   // 销毁事件
+    event MinterConfigured(address indexed minter, uint256 minterAllowedAmount);         // 铸币者配置事件
+    event MinterRemoved(address indexed oldMinter);                                       // 铸币者移除事件
+    event MasterMinterChanged(address indexed newMasterMinter);                          // 主铸币者变更事件
 
     /**
-     * @notice Initializes the fiat token contract.
-     * @param tokenName       The name of the fiat token.
-     * @param tokenSymbol     The symbol of the fiat token.
-     * @param tokenCurrency   The fiat currency that the token represents.
-     * @param tokenDecimals   The number of decimals that the token uses.
-     * @param newMasterMinter The masterMinter address for the fiat token.
-     * @param newPauser       The pauser address for the fiat token.
-     * @param newBlacklister  The blacklister address for the fiat token.
-     * @param newOwner        The owner of the fiat token.
+     * @notice 初始化法币代币合约
+     * @dev 此函数代替构造函数，因为使用代理模式部署。只能调用一次
+     *
+     * 为什么使用 initialize 而不是 constructor？
+     * - 代理合约模式下，逻辑合约的 constructor 不会被调用
+     * - initialize 在代理部署后通过 delegatecall 调用
+     * - 确保每个代理实例只初始化一次
+     *
+     * @param tokenName       代币名称，例如 "USD Coin"
+     * @param tokenSymbol     代币符号，例如 "USDC"
+     * @param tokenCurrency   代表的法币，例如 "USD"
+     * @param tokenDecimals   小数位数，通常为 6
+     * @param newMasterMinter 主铸币者地址（管理所有铸币者）
+     * @param newPauser       暂停者地址（可暂停合约）
+     * @param newBlacklister  黑名单管理者地址（管理黑名单）
+     * @param newOwner        所有者地址（最高权限）
      */
     function initialize(
         string memory tokenName,
@@ -104,7 +129,8 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @dev Throws if called by any account other than a minter.
+     * @notice 修饰符：仅允许铸币者调用
+     * @dev 如果调用者不是铸币者，则交易回滚
      */
     modifier onlyMinters() {
         require(minters[msg.sender], "FiatToken: caller is not a minter");
@@ -112,11 +138,18 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @notice Mints fiat tokens to an address.
-     * @param _to The address that will receive the minted tokens.
-     * @param _amount The amount of tokens to mint. Must be less than or equal
-     * to the minterAllowance of the caller.
-     * @return True if the operation was successful.
+     * @notice 铸造新的法币代币到指定地址
+     * @dev 铸币者的额度会相应减少，类似 ERC20 的 allowance 机制
+     *
+     * 铸币流程：
+     * 1. 检查铸币者是否有足够的铸币额度
+     * 2. 增加总供应量
+     * 3. 增加接收者余额
+     * 4. 减少铸币者的铸币额度
+     *
+     * @param _to 接收新铸造代币的地址，不能是零地址或黑名单地址
+     * @param _amount 要铸造的代币数量，必须 > 0 且 <= 铸币者的剩余额度
+     * @return 操作成功返回 true
      */
     function mint(address _to, uint256 _amount)
         external
@@ -144,7 +177,8 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @dev Throws if called by any account other than the masterMinter
+     * @notice 修饰符：仅允许主铸币者调用
+     * @dev 如果调用者不是 masterMinter，则交易回滚
      */
     modifier onlyMasterMinter() {
         require(
@@ -155,29 +189,28 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @notice Gets the minter allowance for an account.
-     * @param minter The address to check.
-     * @return The remaining minter allowance for the account.
+     * @notice 查询铸币者的剩余铸币额度
+     * @param minter 要查询的铸币者地址
+     * @return 铸币者的剩余铸币额度
      */
     function minterAllowance(address minter) external view returns (uint256) {
         return minterAllowed[minter];
     }
 
     /**
-     * @notice Checks if an account is a minter.
-     * @param account The address to check.
-     * @return True if the account is a minter, false if the account is not a minter.
+     * @notice 检查地址是否是铸币者
+     * @param account 要检查的地址
+     * @return 如果是铸币者返回 true，否则返回 false
      */
     function isMinter(address account) external view returns (bool) {
         return minters[account];
     }
 
     /**
-     * @notice Gets the remaining amount of fiat tokens a spender is allowed to transfer on
-     * behalf of the token owner.
-     * @param owner   The token owner's address.
-     * @param spender The spender's address.
-     * @return The remaining allowance.
+     * @notice 查询支出者在所有者账户上的剩余授权额度（ERC20 标准）
+     * @param owner   代币所有者地址
+     * @param spender 支出者地址
+     * @return 剩余的授权额度
      */
     function allowance(address owner, address spender)
         external
@@ -189,17 +222,17 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @notice Gets the totalSupply of the fiat token.
-     * @return The totalSupply of the fiat token.
+     * @notice 查询代币的总供应量（ERC20 标准）
+     * @return 代币总供应量
      */
     function totalSupply() external override view returns (uint256) {
         return totalSupply_;
     }
 
     /**
-     * @notice Gets the fiat token balance of an account.
-     * @param account  The address to check.
-     * @return balance The fiat token balance of the account.
+     * @notice 查询账户的代币余额（ERC20 标准）
+     * @param account  要查询的地址
+     * @return balance 账户的代币余额
      */
     function balanceOf(address account)
         external
@@ -211,10 +244,14 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @notice Sets a fiat token allowance for a spender to spend on behalf of the caller.
-     * @param spender The spender's address.
-     * @param value   The allowance amount.
-     * @return True if the operation was successful.
+     * @notice 授权支出者代表调用者使用指定数量的代币（ERC20 标准）
+     * @dev 要求合约未暂停，且调用者和支出者都不在黑名单中
+     *
+     * 注意：V2.2 移除了对 spender 的黑名单检查，以节省 gas
+     *
+     * @param spender 被授权的支出者地址
+     * @param value   授权的代币数量
+     * @return 操作成功返回 true
      */
     function approve(address spender, uint256 value)
         external
@@ -230,10 +267,10 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @dev Internal function to set allowance.
-     * @param owner     Token owner's address.
-     * @param spender   Spender's address.
-     * @param value     Allowance amount.
+     * @notice 内部授权函数
+     * @param owner     代币所有者地址
+     * @param spender   支出者地址
+     * @param value     授权数量
      */
     function _approve(
         address owner,
@@ -247,12 +284,17 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @notice Transfers tokens from an address to another by spending the caller's allowance.
-     * @dev The caller must have some fiat token allowance on the payer's tokens.
-     * @param from  Payer's address.
-     * @param to    Payee's address.
-     * @param value Transfer amount.
-     * @return True if the operation was successful.
+     * @notice 使用授权额度从一个地址转账到另一个地址（ERC20 标准）
+     * @dev 调用者必须拥有足够的授权额度。要求合约未暂停，且相关方都不在黑名单中
+     *
+     * 使用场景：
+     * - DeFi 协议代表用户转账
+     * - 自动支付系统
+     *
+     * @param from  付款方地址
+     * @param to    收款方地址
+     * @param value 转账数量
+     * @return 操作成功返回 true
      */
     function transferFrom(
         address from,
@@ -277,10 +319,11 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @notice Transfers tokens from the caller.
-     * @param to    Payee's address.
-     * @param value Transfer amount.
-     * @return True if the operation was successful.
+     * @notice 从调用者转账到指定地址（ERC20 标准）
+     * @dev 要求合约未暂停，且调用者和接收者都不在黑名单中
+     * @param to    收款方地址
+     * @param value 转账数量
+     * @return 操作成功返回 true
      */
     function transfer(address to, uint256 value)
         external
@@ -295,10 +338,10 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @dev Internal function to process transfers.
-     * @param from  Payer's address.
-     * @param to    Payee's address.
-     * @param value Transfer amount.
+     * @notice 内部转账处理函数
+     * @param from  付款方地址
+     * @param to    收款方地址
+     * @param value 转账数量
      */
     function _transfer(
         address from,
@@ -318,10 +361,17 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @notice Adds or updates a new minter with a mint allowance.
-     * @param minter The address of the minter.
-     * @param minterAllowedAmount The minting amount allowed for the minter.
-     * @return True if the operation was successful.
+     * @notice 配置铸币者及其铸币额度
+     * @dev 只有 masterMinter 可以调用。如果铸币者已存在，则更新其额度
+     *
+     * 铸币者管理：
+     * - Circle 通常会为不同的业务场景配置多个铸币者
+     * - 每个铸币者都有独立的铸币额度限制
+     * - 额度用完后需要 masterMinter 重新配置
+     *
+     * @param minter 铸币者地址
+     * @param minterAllowedAmount 允许铸造的代币数量
+     * @return 操作成功返回 true
      */
     function configureMinter(address minter, uint256 minterAllowedAmount)
         external
@@ -336,9 +386,10 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @notice Removes a minter.
-     * @param minter The address of the minter to remove.
-     * @return True if the operation was successful.
+     * @notice 移除铸币者
+     * @dev 只有 masterMinter 可以调用。移除后该地址的铸币额度归零
+     * @param minter 要移除的铸币者地址
+     * @return 操作成功返回 true
      */
     function removeMinter(address minter)
         external
@@ -352,10 +403,14 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @notice Allows a minter to burn some of its own tokens.
-     * @dev The caller must be a minter, must not be blacklisted, and the amount to burn
-     * should be less than or equal to the account's balance.
-     * @param _amount the amount of tokens to be burned.
+     * @notice 铸币者销毁自己的代币
+     * @dev 调用者必须是铸币者且不在黑名单中，销毁数量不能超过余额
+     *
+     * 使用场景：
+     * - 用户赎回法币时，销毁对应的 USDC
+     * - 减少流通中的代币供应量
+     *
+     * @param _amount 要销毁的代币数量
      */
     function burn(uint256 _amount)
         external
@@ -374,8 +429,9 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @notice Updates the master minter address.
-     * @param _newMasterMinter The address of the new master minter.
+     * @notice 更新主铸币者地址
+     * @dev 只有 owner 可以调用
+     * @param _newMasterMinter 新主铸币者地址，不能是零地址
      */
     function updateMasterMinter(address _newMasterMinter) external onlyOwner {
         require(
@@ -387,23 +443,28 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @inheritdoc Blacklistable
+     * @notice 将账户加入黑名单（实现 Blacklistable 抽象方法）
+     * @param _account 要加入黑名单的地址
      */
     function _blacklist(address _account) internal override {
         _setBlacklistState(_account, true);
     }
 
     /**
-     * @inheritdoc Blacklistable
+     * @notice 将账户从黑名单移除（实现 Blacklistable 抽象方法）
+     * @param _account 要移除黑名单的地址
      */
     function _unBlacklist(address _account) internal override {
         _setBlacklistState(_account, false);
     }
 
     /**
-     * @dev Helper method that sets the blacklist state of an account.
-     * @param _account         The address of the account.
-     * @param _shouldBlacklist True if the account should be blacklisted, false if the account should be unblacklisted.
+     * @notice 设置账户的黑名单状态（内部辅助方法）
+     * @dev V1 使用独立的 _deprecatedBlacklisted 映射存储黑名单状态
+     *      V2.2 优化为合并到 balanceAndBlacklistStates 中
+     *
+     * @param _account         账户地址
+     * @param _shouldBlacklist 是否应加入黑名单（true=加入，false=移除）
      */
     function _setBlacklistState(address _account, bool _shouldBlacklist)
         internal
@@ -413,16 +474,21 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @dev Helper method that sets the balance of an account.
-     * @param _account The address of the account.
-     * @param _balance The new fiat token balance of the account.
+     * @notice 设置账户余额（内部辅助方法）
+     * @dev V1 中 balanceAndBlacklistStates 仅用于存储余额
+     *      V2.2 优化为同时存储余额和黑名单状态
+     *
+     * @param _account 账户地址
+     * @param _balance 新的代币余额
      */
     function _setBalance(address _account, uint256 _balance) internal virtual {
         balanceAndBlacklistStates[_account] = _balance;
     }
 
     /**
-     * @inheritdoc Blacklistable
+     * @notice 检查账户是否在黑名单中（实现 Blacklistable 抽象方法）
+     * @param _account 要检查的地址
+     * @return 如果账户在黑名单中返回 true，否则返回 false
      */
     function _isBlacklisted(address _account)
         internal
@@ -435,9 +501,9 @@ contract FiatTokenV1 is AbstractFiatTokenV1, Ownable, Pausable, Blacklistable {
     }
 
     /**
-     * @dev Helper method to obtain the balance of an account.
-     * @param _account  The address of the account.
-     * @return          The fiat token balance of the account.
+     * @notice 获取账户余额（内部辅助方法）
+     * @param _account  账户地址
+     * @return          账户的代币余额
      */
     function _balanceOf(address _account)
         internal

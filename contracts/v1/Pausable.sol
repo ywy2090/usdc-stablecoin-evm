@@ -28,28 +28,36 @@ pragma solidity 0.6.12;
 import { Ownable } from "./Ownable.sol";
 
 /**
- * @notice Base contract which allows children to implement an emergency stop
- * mechanism
- * @dev Forked from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/feb665136c0dae9912e08397c1a21c4af3651ef3/contracts/lifecycle/Pausable.sol
- * Modifications:
- * 1. Added pauser role, switched pause/unpause to be onlyPauser (6/14/2018)
- * 2. Removed whenNotPause/whenPaused from pause/unpause (6/14/2018)
- * 3. Removed whenPaused (6/14/2018)
- * 4. Switches ownable library to use ZeppelinOS (7/12/18)
- * 5. Remove constructor (7/13/18)
- * 6. Reformat, conform to Solidity 0.6 syntax and add error messages (5/13/20)
- * 7. Make public functions external (5/27/20)
+ * @title Pausable - 暂停机制合约
+ * @notice 允许子合约实现紧急停止机制的基础合约
+ * @dev 源自 OpenZeppelin 的 Pausable 合约
+ *
+ * 功能说明：
+ * - 引入 pauser 角色，可以暂停和恢复合约
+ * - 提供 whenNotPaused 修饰符，使函数只能在未暂停时调用
+ * - owner 可以更换 pauser 地址
+ * - 用于紧急情况下冻结所有代币转账操作
+ *
+ * 修改历史：
+ * 1. 添加 pauser 角色，将 pause/unpause 改为 onlyPauser (6/14/2018)
+ * 2. 从 pause/unpause 中移除 whenNotPause/whenPaused (6/14/2018)
+ * 3. 移除 whenPaused (6/14/2018)
+ * 4. 切换到使用 ZeppelinOS 的 ownable 库 (7/12/18)
+ * 5. 移除构造函数 (7/13/18)
+ * 6. 重新格式化，符合 Solidity 0.6 语法并添加错误消息 (5/13/20)
+ * 7. 将 public 函数改为 external (5/27/20)
  */
 contract Pausable is Ownable {
-    event Pause();
-    event Unpause();
-    event PauserChanged(address indexed newAddress);
+    event Pause();      // 暂停事件
+    event Unpause();    // 恢复事件
+    event PauserChanged(address indexed newAddress);  // Pauser 地址变更事件
 
-    address public pauser;
-    bool public paused = false;
+    address public pauser;      // 有权暂停合约的地址
+    bool public paused = false; // 合约是否处于暂停状态
 
     /**
-     * @dev Modifier to make a function callable only when the contract is not paused.
+     * @notice 修饰符：仅在合约未暂停时可调用
+     * @dev 使函数只能在合约未暂停状态下执行
      */
     modifier whenNotPaused() {
         require(!paused, "Pausable: paused");
@@ -57,7 +65,8 @@ contract Pausable is Ownable {
     }
 
     /**
-     * @dev throws if called by any account other than the pauser
+     * @notice 修饰符：仅允许 pauser 调用
+     * @dev 如果调用者不是 pauser，则交易回滚
      */
     modifier onlyPauser() {
         require(msg.sender == pauser, "Pausable: caller is not the pauser");
@@ -65,7 +74,8 @@ contract Pausable is Ownable {
     }
 
     /**
-     * @dev called by the owner to pause, triggers stopped state
+     * @notice 暂停合约
+     * @dev 只有 pauser 可以调用，触发停止状态，所有转账操作将被禁止
      */
     function pause() external onlyPauser {
         paused = true;
@@ -73,7 +83,8 @@ contract Pausable is Ownable {
     }
 
     /**
-     * @dev called by the owner to unpause, returns to normal state
+     * @notice 恢复合约
+     * @dev 只有 pauser 可以调用，返回正常状态，恢复所有转账操作
      */
     function unpause() external onlyPauser {
         paused = false;
@@ -81,8 +92,9 @@ contract Pausable is Ownable {
     }
 
     /**
-     * @notice Updates the pauser address.
-     * @param _newPauser The address of the new pauser.
+     * @notice 更新 pauser 地址
+     * @dev 只有 owner 可以调用
+     * @param _newPauser 新 pauser 的地址，不能是零地址
      */
     function updatePauser(address _newPauser) external onlyOwner {
         require(

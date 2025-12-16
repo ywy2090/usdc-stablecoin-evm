@@ -21,19 +21,31 @@ pragma solidity 0.6.12;
 import { Ownable } from "./Ownable.sol";
 
 /**
- * @title Blacklistable Token
- * @dev Allows accounts to be blacklisted by a "blacklister" role
+ * @title Blacklistable - 黑名单管理合约
+ * @notice 允许通过 "blacklister" 角色将账户加入黑名单
+ * @dev 抽象合约，提供黑名单管理功能
+ *
+ * 功能说明：
+ * - blacklister 可以将任意地址加入或移出黑名单
+ * - 黑名单地址无法进行代币转账（发送和接收）
+ * - owner 可以更换 blacklister 地址
+ * - 用于合规要求，阻止可疑地址使用代币
+ *
+ * 设计模式：
+ * - 使用抽象方法 _isBlacklisted, _blacklist, _unBlacklist
+ * - 允许子合约自定义黑名单存储实现（V2.2 中优化了存储结构）
  */
 abstract contract Blacklistable is Ownable {
-    address public blacklister;
-    mapping(address => bool) internal _deprecatedBlacklisted;
+    address public blacklister;  // 有权管理黑名单的地址
+    mapping(address => bool) internal _deprecatedBlacklisted;  // 已废弃的黑名单映射（V2.2 后不再使用）
 
-    event Blacklisted(address indexed _account);
-    event UnBlacklisted(address indexed _account);
-    event BlacklisterChanged(address indexed newBlacklister);
+    event Blacklisted(address indexed _account);       // 地址被加入黑名单事件
+    event UnBlacklisted(address indexed _account);     // 地址被移出黑名单事件
+    event BlacklisterChanged(address indexed newBlacklister);  // Blacklister 地址变更事件
 
     /**
-     * @dev Throws if called by any account other than the blacklister.
+     * @notice 修饰符：仅允许 blacklister 调用
+     * @dev 如果调用者不是 blacklister，则交易回滚
      */
     modifier onlyBlacklister() {
         require(
@@ -44,8 +56,9 @@ abstract contract Blacklistable is Ownable {
     }
 
     /**
-     * @dev Throws if argument account is blacklisted.
-     * @param _account The address to check.
+     * @notice 修饰符：要求账户不在黑名单中
+     * @dev 如果账户在黑名单中，则交易回滚
+     * @param _account 要检查的地址
      */
     modifier notBlacklisted(address _account) {
         require(
@@ -56,17 +69,18 @@ abstract contract Blacklistable is Ownable {
     }
 
     /**
-     * @notice Checks if account is blacklisted.
-     * @param _account The address to check.
-     * @return True if the account is blacklisted, false if the account is not blacklisted.
+     * @notice 查询账户是否在黑名单中
+     * @param _account 要查询的地址
+     * @return 如果账户在黑名单中返回 true，否则返回 false
      */
     function isBlacklisted(address _account) external view returns (bool) {
         return _isBlacklisted(_account);
     }
 
     /**
-     * @notice Adds account to blacklist.
-     * @param _account The address to blacklist.
+     * @notice 将账户加入黑名单
+     * @dev 只有 blacklister 可以调用
+     * @param _account 要加入黑名单的地址
      */
     function blacklist(address _account) external onlyBlacklister {
         _blacklist(_account);
@@ -74,8 +88,9 @@ abstract contract Blacklistable is Ownable {
     }
 
     /**
-     * @notice Removes account from blacklist.
-     * @param _account The address to remove from the blacklist.
+     * @notice 将账户从黑名单中移除
+     * @dev 只有 blacklister 可以调用
+     * @param _account 要移除黑名单的地址
      */
     function unBlacklist(address _account) external onlyBlacklister {
         _unBlacklist(_account);
@@ -83,8 +98,9 @@ abstract contract Blacklistable is Ownable {
     }
 
     /**
-     * @notice Updates the blacklister address.
-     * @param _newBlacklister The address of the new blacklister.
+     * @notice 更新 blacklister 地址
+     * @dev 只有 owner 可以调用
+     * @param _newBlacklister 新 blacklister 的地址，不能是零地址
      */
     function updateBlacklister(address _newBlacklister) external onlyOwner {
         require(
@@ -96,9 +112,10 @@ abstract contract Blacklistable is Ownable {
     }
 
     /**
-     * @dev Checks if account is blacklisted.
-     * @param _account The address to check.
-     * @return true if the account is blacklisted, false otherwise.
+     * @notice 检查账户是否在黑名单中（内部虚函数）
+     * @dev 由子合约实现具体的黑名单检查逻辑
+     * @param _account 要检查的地址
+     * @return 如果账户在黑名单中返回 true，否则返回 false
      */
     function _isBlacklisted(address _account)
         internal
@@ -107,14 +124,16 @@ abstract contract Blacklistable is Ownable {
         returns (bool);
 
     /**
-     * @dev Helper method that blacklists an account.
-     * @param _account The address to blacklist.
+     * @notice 将账户加入黑名单的内部辅助方法（内部虚函数）
+     * @dev 由子合约实现具体的黑名单添加逻辑
+     * @param _account 要加入黑名单的地址
      */
     function _blacklist(address _account) internal virtual;
 
     /**
-     * @dev Helper method that unblacklists an account.
-     * @param _account The address to unblacklist.
+     * @notice 将账户从黑名单移除的内部辅助方法（内部虚函数）
+     * @dev 由子合约实现具体的黑名单移除逻辑
+     * @param _account 要移除黑名单的地址
      */
     function _unBlacklist(address _account) internal virtual;
 }
